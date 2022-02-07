@@ -4,6 +4,7 @@
 
 ## Affine Constraints #########################################################
 ##################### lc ≤ Ax ≤ uc ############################################
+#######################   Ax+b ∈ K ############################################
 
 function allocateconstraints(m::Optimizer, N::Int)
     numcon = getnumcon(m.task)
@@ -15,6 +16,7 @@ function allocateconstraints(m::Optimizer, N::Int)
     end
     return id
 end
+
 
 function getconboundlist(t::Mosek.Task, subj::Vector{Int32})
     n = length(subj)
@@ -61,17 +63,45 @@ function split_scalar_matrix(m::Optimizer, terms::Vector{MOI.ScalarAffineTerm{Fl
     return cols, values
 end
 
+function set_afes(task::Mosek.MSKtask,afes::Vector{Int64}, axb :: MOI.VectorAffineFunction{Float64})
+    # a_i*x
+    #   struct VectorAffineTerm{T}
+    #       output_index::Int64
+    #       scalar_term::ScalarAffineTerm{T}
+    #   end
+    # a_ij*x_j
+    #   struct ScalarAffineTerm{T}
+    #       coefficient::T
+    #       variable::VariableIndex
+    #   end
+    # Ax+b
+    #   struct VectorAffineFunction{T}
+    #       terms     :: Vector{VectorAffineTerm{T}}
+    #       constants :: Vector{T}
+    #   end
+
+    putafeglist(task,afes,axb.constants)
+    for i in 1:length(axb.terms)
+        cols,values = split_scalar_matrix(m, axb.terms[i],
+                                          (j, ids, coefs) -> putafebarfentry(m.task, afes[i], j, ids, coefs))
+        putafefrow(task,afes[i],cols,values)
+    end
+    ax = axb.terms
+    c = axb.constants
+end
+
+
 function set_row(task::Mosek.MSKtask, row::Int32, cols::ColumnIndices,
                  values::Vector{Float64})
     putarow(task, row, cols.values, values)
 end
+
 function set_row(m::Optimizer, row::Int32,
                  terms::Vector{MOI.ScalarAffineTerm{Float64}})
     cols, values = split_scalar_matrix(m, terms,
         (j, ids, coefs) -> putbaraij(m.task, row, j, ids, coefs))
     set_row(m.task, row, ColumnIndices(cols), values)
 end
-
 
 function set_coefficients(task::Mosek.MSKtask, rows::Vector{Int32},
                           cols::ColumnIndices, values::Vector{Float64})
@@ -84,6 +114,7 @@ function set_coefficients(task::Mosek.MSKtask, rows::Vector{Int32},
     @assert n == length(values)
     set_coefficient(task, rows, ColumnIndices(fill(col.value, n)), values)
 end
+
 function set_coefficients(m::Optimizer, rows::Vector{Int32},
                           vi::MOI.VariableIndex, values::Vector{Float64})
     set_coefficient(m.task, rows, mosek_index(m, vi), values)
@@ -336,6 +367,7 @@ const ScalarLinearDomain = Union{MOI.LessThan{Float64},
 ###############################################################################
 
 MOI.supports_constraint(::Optimizer, ::Type{<:Union{MOI.VariableIndex, MOI.ScalarAffineFunction}}, ::Type{<:ScalarLinearDomain}) = true
+MOI.supports_constraint(::Optimizer, ::Type{MOI.VectorAffineFunction}, ::Type{<:VectorCone}) = true
 MOI.supports_constraint(::Optimizer, ::Type{MOI.VectorOfVariables}, ::Type{<:VectorCone}) = true
 MOI.supports_constraint(::Optimizer, ::Type{MOI.VariableIndex}, ::Type{<:MOI.Integer}) = true
 MOI.supports_add_constrained_variables(::Optimizer, ::Type{MOI.PositiveSemidefiniteConeTriangle}) = true
@@ -362,6 +394,43 @@ function MOI.add_constraint(m  ::Optimizer,
 
     add_bound(m, r, dom)
 
+    return ci
+end
+
+
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.SecondOrderCone) = appendquadraticconedomaindomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.RotatedSecondOrderCone) = appendrquadraticconedomaindomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.PowerCone) = appendprimalpowerconedomain(t,N,[dom.exponent,1.0/dom.exponent])
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.DualPowerCone) = appenddualpowerconedomain(t,N,[dom.exponent,1.0/dom.exponent])
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.ExponentialCone) = appendprimalexpconedomain(t)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.GeometricMeanCone) = appendprimalgeomeanconedomain(t,N)
+#add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.DualGeometricMeanCone) = appenddualgeomeanconedomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.Zeros) = appendrzerodomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.Reals) = appendrdomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.Nonnegatives) = appendrplusdomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.Nonpositives) = appendrminusdomain(t,N)
+
+function MOI.add_constraint(m   :: Optimizer,
+                            axb :: MOI.VectorAffineFunction{Float64},
+                            dom :: D) where {D <: VectorCone}
+    N = length(axb.constants)
+    # Duplicate indices not supported
+    axb = MOIU.canonical(axb)
+
+    numafe = getnumafe(m.task)
+    alloced = ensurefree(m.afe_block,N)
+    if alloced > 0
+        appendafes(m.task,alloced)
+    end
+    id = newblock(m.afe_block,N)
+    afeidxs = getindexes(m.afe_block,id)
+    set_afes(m.task,afeidxs,axb)
+
+    domidx = add_domain(m.task,N,dom)
+    appendacc(m.task,domidx,afeidxs,zeros(Float64,N))
+    push!(m.accs,id)
+
+    ci = MOI.ConstraintIndex{MOI.VectorAffineFunction{Float64}, D}(id)
     return ci
 end
 
@@ -629,6 +698,27 @@ function MOI.delete(
     putconboundlist(m.task,subi_i32,fill(MSK_BK_FX,n),b,b)
 
     deleteblock(m.c_block, cref.value)
+end
+
+function MOI.delete(m::Optimizer,
+                    cref::MOI.ConstraintIndex{F,D}) where {F <: MOI.VectorAffineFunction{Float64},
+                                                           D <: VectorCone}
+    MOI.throw_if_not_valid(m, cref)
+    delete_name(m, cref)
+    accidx = cref.value
+    afeblockidx = m.accs[accidx]
+    afeidxs = getindexes(m.afe_block, afeblockidx)
+
+    n = length(afeidxs)
+    ptr = fill(Int64(0), n)
+    b = fill(0.0,n)
+    putafefrowlist(m.task,afeidxs,ptr,ptr,Int32[],Float64[])
+    putafeglist(m.task,afeidxs,b)
+
+    deleteblock(m.afe_block, afeblockidx)
+    m.accs[accidx] = 0
+
+    putacc(m.task,accidx,0,Int64[],Float64[]) # set acc to empty zero domain
 end
 
 function MOI.is_valid(model::Optimizer,

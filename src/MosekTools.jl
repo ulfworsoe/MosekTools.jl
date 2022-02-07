@@ -112,6 +112,17 @@ mutable struct Optimizer  <: MOI.AbstractOptimizer
     """
     c_block :: LinkedInts
 
+    """
+    One scalar entry pre AFE block in the underlying task.
+    """
+    afe_block :: LinkedInts
+    """
+    One entry per Model constraint block. Entry accs[i] is either 0
+    (if the corresponing consttrint block is deleted) or a block index
+    in afe_block.
+    """
+    accs      :: Vector{Int}
+
     # i -> 0: Not in a VectorOfVariables constraint
     # i -> +j: In `MOI.ConstraintIndex{MOI.VectorOfVariables, ?}(j)`
     # i -> -j: In `MOI.VectorOfVariables` constraint with `MOI.VariableIndex(j)` as first variable
@@ -131,6 +142,7 @@ mutable struct Optimizer  <: MOI.AbstractOptimizer
 
     fallback :: Union{String, Nothing}
 
+    
     function Optimizer(; kws...)
         optimizer = new(
             maketask(), # task
@@ -146,12 +158,15 @@ mutable struct Optimizer  <: MOI.AbstractOptimizer
             MatrixIndex[], # x_sd
             Int[], # sd_dim
             LinkedInts(), # c_block
+            LinkedInts(), # afe_block
+            Int[], # accs
             Int32[], # variable_to_vector_constraint_id
             nothing,# trm
             MosekSolution[],
             true, # feasibility_sense
             nothing,
         )
+        appendrzerodomain(optimizer.task,0)
         Mosek.putstreamfunc(optimizer.task, Mosek.MSK_STREAM_LOG, m -> print(m))
         if length(kws) > 0
             @warn("""Passing optimizer attributes as keyword arguments to

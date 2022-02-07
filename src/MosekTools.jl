@@ -29,6 +29,10 @@ struct MosekSolution
     sux      :: Vector{Float64}
     snx      :: Vector{Float64}
 
+    accptr   :: Vector{Int64}
+    accx     :: Vector{Float64}
+    accy     :: Vector{Float64}
+
     cstatus  :: Vector{Stakey}
     xc       :: Vector{Float64}
     slc      :: Vector{Float64}
@@ -142,7 +146,6 @@ mutable struct Optimizer  <: MOI.AbstractOptimizer
 
     fallback :: Union{String, Nothing}
 
-    
     function Optimizer(; kws...)
         optimizer = new(
             maketask(), # task
@@ -312,56 +315,77 @@ function MOI.optimize!(m::Optimizer)
     # We want `VariablePrimal(1)`, ... to be `MSK_SOL_ITR` in that case
     # so puting it first should solve the issue in that case, see
     # https://github.com/jump-dev/MosekTools.jl/issues/66
+
+    accptr = Int64[0]
+    for i in 1:getnumacc(m.task)
+        push!(accptr,getaccn(m.task,i))
+    end
+
     if solutiondef(m.task,MSK_SOL_ITR)
+        accx = evaluateaccs(m.task,MSK_SOL_ITR)
+
+        problemsta,solutionsta,skc,skx,skn,xc,xx,y,slc,suc,slx,sux,snx,doty = getsolutionnew(m.task,MSK_SOL_ITR)
+
         push!(m.solutions,
               MosekSolution(MSK_SOL_ITR,
-                            getsolsta(m.task,MSK_SOL_ITR),
-                            getprosta(m.task,MSK_SOL_ITR),
-                            getskx(m.task,MSK_SOL_ITR),
-                            getxx(m.task,MSK_SOL_ITR),
+                            solutionsta,
+                            problemsta,
+                            skx,
+                            xx,
                             matrix_solution(m, MSK_SOL_ITR),
-                            getslx(m.task,MSK_SOL_ITR),
-                            getsux(m.task,MSK_SOL_ITR),
-                            getsnx(m.task,MSK_SOL_ITR),
-                            getskc(m.task,MSK_SOL_ITR),
-                            getxc(m.task,MSK_SOL_ITR),
-                            getslc(m.task,MSK_SOL_ITR),
-                            getsuc(m.task,MSK_SOL_ITR),
-                            gety(m.task,MSK_SOL_ITR)))
+                            slx,
+                            sux,
+                            snx,
+                            accptr,
+                            accx,
+                            doty,
+                            skc,
+                            xc,
+                            slc,
+                            suc,
+                            y))
     end
     if solutiondef(m.task,MSK_SOL_ITG)
+        problemsta,solutionsta,skc,skx,skn,xc,xx,y,slc,suc,slx,sux,snx,doty = getsolutionnew(m.task,MSK_SOL_ITG)
         push!(m.solutions,
               MosekSolution(MSK_SOL_ITG,
-                            getsolsta(m.task, MSK_SOL_ITG),
-                            getprosta(m.task, MSK_SOL_ITG),
-                            getskx(m.task, MSK_SOL_ITG),
-                            getxx(m.task, MSK_SOL_ITG),
-                            matrix_solution(m, MSK_SOL_ITG),
+                            solutionsta,
+                            problemsta,
+                            skx,
+                            xx,
                             Float64[],
+                            slx,
+                            sux,
+                            snx,
+                            accptr,
                             Float64[],
-                            Float64[],
-                            getskc(m.task, MSK_SOL_ITG),
-                            getxc(m.task, MSK_SOL_ITG),
-                            Float64[],
-                            Float64[],
-                            Float64[]))
+                            doty,
+                            skc,
+                            xc,
+                            slc,
+                            suc,
+                            y))
     end
     if solutiondef(m.task,MSK_SOL_BAS)
+        problemsta,solutionsta,skc,skx,skn,xc,xx,y,slc,suc,slx,sux,snx,doty = getsolutionnew(m.task,MSK_SOL_BAS)
         push!(m.solutions,
-              MosekSolution(MSK_SOL_BAS,
-                            getsolsta(m.task,MSK_SOL_BAS),
-                            getprosta(m.task,MSK_SOL_BAS),
-                            getskx(m.task,MSK_SOL_BAS),
-                            getxx(m.task,MSK_SOL_BAS),
+              MosekSolution(MSK_SOL_ITG,
+                            solutionsta,
+                            problemsta,
+                            skx,
+                            xx,
                             matrix_solution(m, MSK_SOL_BAS),
-                            getslx(m.task,MSK_SOL_BAS),
-                            getsux(m.task,MSK_SOL_BAS),
+                            slx,
+                            sux,
+                            snx,
+                            accptr,
                             Float64[],
-                            getskc(m.task,MSK_SOL_BAS),
-                            getxc(m.task,MSK_SOL_BAS),
-                            getslc(m.task,MSK_SOL_BAS),
-                            getsuc(m.task,MSK_SOL_BAS),
-                            gety(m.task,MSK_SOL_BAS)))
+                            doty,
+                            skc,
+                            xc,
+                            slc,
+                            suc,
+                            y))
     end
 end
 

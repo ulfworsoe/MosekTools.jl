@@ -63,7 +63,7 @@ function split_scalar_matrix(m::Optimizer, terms::Vector{MOI.ScalarAffineTerm{Fl
     return cols, values
 end
 
-function set_afes(task::Mosek.MSKtask,afes::Vector{Int64}, axb :: MOI.VectorAffineFunction{Float64})
+function set_afes(m::Optimizer,afes::Vector{Int64}, axb :: MOI.VectorAffineFunction{Float64})
     # a_i*x
     #   struct VectorAffineTerm{T}
     #       output_index::Int64
@@ -80,11 +80,24 @@ function set_afes(task::Mosek.MSKtask,afes::Vector{Int64}, axb :: MOI.VectorAffi
     #       constants :: Vector{T}
     #   end
 
-    putafeglist(task,afes,axb.constants)
-    for i in 1:length(axb.terms)
-        cols,values = split_scalar_matrix(m, axb.terms[i],
-                                          (j, ids, coefs) -> putafebarfentry(m.task, afes[i], j, ids, coefs))
-        putafefrow(task,afes[i],cols,values)
+    putafeglist(m.task,afes,axb.constants)
+
+    terms = sort(axb.terms, lt = (a,b) -> a.output_index < b.output_index)
+    ptr = Int[1]
+    for i in 2:length(terms)
+        if terms[i].output_index <= terms[i-1].output_index
+            push!(ptr,i)
+        end
+    end
+    push!(ptr,length(terms)+1)
+
+    for i in 1:length(ptr)-1
+        rowi = terms[ptr[i]].output_index
+        rowterms = [ t.scalar_term for t in terms[ptr[i]:ptr[i+1]-1] ]
+
+        cols,values = split_scalar_matrix(m, rowterms,
+                                          (j, ids, coefs) -> putafebarfentry(m.task, afes[rowi], j, ids, coefs))
+        putafefrow(m.task,afes[rowi],cols,values)
     end
     ax = axb.terms
     c = axb.constants
@@ -367,7 +380,7 @@ const ScalarLinearDomain = Union{MOI.LessThan{Float64},
 ###############################################################################
 
 MOI.supports_constraint(::Optimizer, ::Type{<:Union{MOI.VariableIndex, MOI.ScalarAffineFunction}}, ::Type{<:ScalarLinearDomain}) = true
-MOI.supports_constraint(::Optimizer, ::Type{MOI.VectorAffineFunction}, ::Type{<:VectorCone}) = true
+MOI.supports_constraint(::Optimizer, ::Type{MOI.VectorAffineFunction{Float64}}, ::Type{<:VectorCone}) = true
 MOI.supports_constraint(::Optimizer, ::Type{MOI.VectorOfVariables}, ::Type{<:VectorCone}) = true
 MOI.supports_constraint(::Optimizer, ::Type{MOI.VariableIndex}, ::Type{<:MOI.Integer}) = true
 MOI.supports_add_constrained_variables(::Optimizer, ::Type{MOI.PositiveSemidefiniteConeTriangle}) = true
@@ -398,8 +411,8 @@ function MOI.add_constraint(m  ::Optimizer,
 end
 
 
-add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.SecondOrderCone) = appendquadraticconedomaindomain(t,N)
-add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.RotatedSecondOrderCone) = appendrquadraticconedomaindomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.SecondOrderCone) = appendquadraticconedomain(t,N)
+add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.RotatedSecondOrderCone) = appendrquadraticconedomain(t,N)
 add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.PowerCone) = appendprimalpowerconedomain(t,N,[dom.exponent,1.0/dom.exponent])
 add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.DualPowerCone) = appenddualpowerconedomain(t,N,[dom.exponent,1.0/dom.exponent])
 add_domain(t::Mosek.MSKtask,N::Int,dom::MOI.ExponentialCone) = appendprimalexpconedomain(t)
@@ -424,7 +437,7 @@ function MOI.add_constraint(m   :: Optimizer,
     end
     id = newblock(m.afe_block,N)
     afeidxs = getindexes(m.afe_block,id)
-    set_afes(m.task,afeidxs,axb)
+    set_afes(m,afeidxs,axb)
 
     domidx = add_domain(m.task,N,dom)
     appendacc(m.task,domidx,afeidxs,zeros(Float64,N))

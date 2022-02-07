@@ -8,9 +8,11 @@ function set_primal_start(task::Mosek.MSKtask, col::ColumnIndex, value::Float64)
         putxxslice(task, sol, col.value, col.value + Int32(1), xx)
     end
 end
+
 function set_primal_start(m::Optimizer, vi::MOI.VariableIndex, value::Float64)
     set_primal_start(m.task, mosek_index(m, vi), value)
 end
+
 function set_primal_start(task::Mosek.MSKtask, cols::ColumnIndices,
                           values::Vector{Float64})
     for sol in [MSK_SOL_BAS, MSK_SOL_ITG]
@@ -23,6 +25,7 @@ function set_primal_start(task::Mosek.MSKtask, cols::ColumnIndices,
         putxx(task, sol, xx)
     end
 end
+
 function set_primal_start(m::Optimizer, vis::Vector{MOI.VariableIndex},
                           values::Vector{Float64})
     if all(vi -> is_scalar(m, vi), vis)
@@ -41,6 +44,7 @@ end
 function variable_primal(m::Optimizer, N, col::ColumnIndex)
     return m.solutions[N].xx[col.value]
 end
+
 function variable_primal(m::Optimizer, N, mat::MatrixIndex)
     d = m.sd_dim[mat.matrix]
     r = d - mat.column + 1
@@ -322,6 +326,26 @@ function MOI.get(m     ::Optimizer,
     cid = ref2id(ci)
     subi = getindex(m.c_block,cid)
     return m.solutions[attr.result_index].xc[subi]
+end
+
+function MOI.get(m    :: Optimizer,
+                 attr :: MOI.ConstraintPrimal,
+                 ci   :: MOI.ConstraintIndex{MOI.VectorAffineFunction{Float64},D}) where D <: VectorCone
+    cid = ref2id(ci)
+    accidx = m.accs[cid]
+    accptr = m.solutions[attr.result_index].accptr
+    accx = m.solutions[attr.result_index].accx[accptr[accidx]..accptr[accidx+1]]
+    return accx
+end
+
+function MOI.get(m    :: Optimizer,
+                 attr :: MOI.ConstraintDual,
+                 ci   :: MOI.ConstraintIndex{MOI.VectorAffineFunction{Float64},D}) where D <: VectorCone
+    cid = ref2id(ci)
+    accidx = m.accs[cid]
+    accptr = m.solutions[attr.result_index].accptr
+    accx = m.solutions[attr.result_index].accy[accptr[accidx]..accptr[accidx+1]]
+    return accx
 end
 
 function _variable_constraint_dual(sol::MosekSolution, col::ColumnIndex,

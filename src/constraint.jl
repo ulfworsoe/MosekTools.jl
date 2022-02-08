@@ -524,16 +524,21 @@ function MOI.add_constrained_variables(
     dom::MOI.PositiveSemidefiniteConeTriangle
 )
     N = dom.side_dimension
-    if N < 2
+    if     N <  1
         error("Invalid dimension for semidefinite constraint, got $N which is ",
               "smaller than the minimum dimension 2.")
+    # elseif N == 1
+    #     vi = MOI.add_variable(m)
+    #     con_idx = MOI.add_constraint(m,vi,MOI.GreaterThan(0.0))
+    #     return [vi], con_idx
+   else
+        appendbarvars(m.task, [Int32(N)])
+        push!(m.sd_dim,N)
+        id  = length(m.sd_dim)
+        vis = [new_variable_index(m, MatrixIndex(id, i, j)) for i in 1:N for j in 1:i]
+        con_idx = MOI.ConstraintIndex{MOI.VectorOfVariables, MOI.PositiveSemidefiniteConeTriangle}(id)
+        return vis, con_idx
     end
-    appendbarvars(m.task, [Int32(N)])
-    push!(m.sd_dim, N)
-    id = length(m.sd_dim)
-    vis = [new_variable_index(m, MatrixIndex(id, i, j)) for i in 1:N for j in 1:i]
-    con_idx = MOI.ConstraintIndex{MOI.VectorOfVariables, MOI.PositiveSemidefiniteConeTriangle}(id)
-    return vis, con_idx
 end
 
 ## Get ########################################################################
